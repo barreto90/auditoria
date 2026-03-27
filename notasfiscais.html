@@ -54,14 +54,13 @@
       // 1. Fornecedores extras e excluídos
       const fornecData = await fbGet('config', 'fornecedores');
       if (fornecData) {
-        const extras   = fornecData.extras   || {};
-        const excluidos = fornecData.excluidos || [];
+        const extras    = (fornecData.extras   && typeof fornecData.extras   === 'object') ? fornecData.extras   : {};
+        const excluidos = Array.isArray(fornecData.excluidos) ? fornecData.excluidos : [];
         excluidos.forEach(c => delete window.FORNECEDORES[c]);
         Object.assign(window.FORNECEDORES, extras);
         excluidos.forEach(c => { if (!extras[c]) delete window.FORNECEDORES[c]; });
-        // Atualiza localStorage local como cache
         try {
-          localStorage.setItem('fornecedores_extras',   JSON.stringify(extras));
+          localStorage.setItem('fornecedores_extras',    JSON.stringify(extras));
           localStorage.setItem('fornecedores_excluidos', JSON.stringify(excluidos));
         } catch(e) {}
       }
@@ -69,8 +68,8 @@
       // 2. Isenções IR
       const irData = await fbGet('config', 'isencoes_ir');
       if (irData) {
-        const extras   = irData.extras   || {};
-        const excluidos = irData.excluidos || [];
+        const extras    = (irData.extras   && typeof irData.extras   === 'object') ? irData.extras   : {};
+        const excluidos = Array.isArray(irData.excluidos) ? irData.excluidos : [];
         excluidos.forEach(k => delete window.ISENCOES_IR[k]);
         Object.assign(window.ISENCOES_IR, extras);
         excluidos.forEach(k => { if (!extras[k]) delete window.ISENCOES_IR[k]; });
@@ -83,8 +82,8 @@
       // 3. Alíquotas IR
       const aliqData = await fbGet('config', 'aliquotas_ir');
       if (aliqData) {
-        const extras   = aliqData.extras   || {};
-        const excluidos = aliqData.excluidos || [];
+        const extras    = (aliqData.extras   && typeof aliqData.extras   === 'object') ? aliqData.extras   : {};
+        const excluidos = Array.isArray(aliqData.excluidos) ? aliqData.excluidos : [];
         excluidos.forEach(k => delete window.ALIQUOTAS_IR[k]);
         Object.assign(window.ALIQUOTAS_IR, extras);
         excluidos.forEach(k => { if (!extras[k]) delete window.ALIQUOTAS_IR[k]; });
@@ -97,7 +96,7 @@
       // 4. Textos de docs complementares
       const docsData = await fbGet('config', 'docs_complementares');
       if (docsData) {
-        const textos = docsData.textos || {};
+        const textos = (docsData.textos && typeof docsData.textos === 'object') ? docsData.textos : {};
         Object.entries(textos).forEach(([id, texto]) => {
           for (const cat of Object.values(window.DOCS_COMPLEMENTARES)) {
             const item = cat.find(i => i.id === id);
@@ -110,7 +109,7 @@
       // 5. Fornecedores simplificados
       const simplifData = await fbGet('config', 'simplificados');
       if (simplifData) {
-        const lista = simplifData.lista || [];
+        const lista = Array.isArray(simplifData.lista) ? simplifData.lista : [];
         try { localStorage.setItem('fornecedores_simplificados', JSON.stringify(lista)); } catch(e) {}
       }
 
