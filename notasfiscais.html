@@ -47,79 +47,86 @@
   }
 
   // ── Carregamento inicial ───────────────────────────────────────────────────
-
   async function carregarDadosFirestore() {
-    mostrarLoadingFirebase(true);
-    try {
-      // 1. Fornecedores extras e excluídos
-      const fornecData = await fbGet('config', 'fornecedores');
-      if (fornecData) {
-        const extras    = (fornecData.extras   && typeof fornecData.extras   === 'object') ? fornecData.extras   : {};
-        const excluidos = Array.isArray(fornecData.excluidos) ? fornecData.excluidos : [];
-        excluidos.forEach(c => delete window.FORNECEDORES[c]);
-        Object.assign(window.FORNECEDORES, extras);
-        excluidos.forEach(c => { if (!extras[c]) delete window.FORNECEDORES[c]; });
-        try {
-          localStorage.setItem('fornecedores_extras',    JSON.stringify(extras));
-          localStorage.setItem('fornecedores_excluidos', JSON.stringify(excluidos));
-        } catch(e) {}
-      }
+  mostrarLoadingFirebase(true);
+  try {
+    // Aguarda o script principal expor as variáveis globais
+    await new Promise(resolve => {
+      if (window.FORNECEDORES) { resolve(); return; }
+      const t = setInterval(() => {
+        if (window.FORNECEDORES) { clearInterval(t); resolve(); }
+      }, 50);
+      setTimeout(() => { clearInterval(t); resolve(); }, 5000);
+    });
 
-      // 2. Isenções IR
-      const irData = await fbGet('config', 'isencoes_ir');
-      if (irData) {
-        const extras    = (irData.extras   && typeof irData.extras   === 'object') ? irData.extras   : {};
-        const excluidos = Array.isArray(irData.excluidos) ? irData.excluidos : [];
-        excluidos.forEach(k => delete window.ISENCOES_IR[k]);
-        Object.assign(window.ISENCOES_IR, extras);
-        excluidos.forEach(k => { if (!extras[k]) delete window.ISENCOES_IR[k]; });
-        try {
-          localStorage.setItem('ir_extras',   JSON.stringify(extras));
-          localStorage.setItem('ir_excluidos', JSON.stringify(excluidos));
-        } catch(e) {}
-      }
-
-      // 3. Alíquotas IR
-      const aliqData = await fbGet('config', 'aliquotas_ir');
-      if (aliqData) {
-        const extras    = (aliqData.extras   && typeof aliqData.extras   === 'object') ? aliqData.extras   : {};
-        const excluidos = Array.isArray(aliqData.excluidos) ? aliqData.excluidos : [];
-        excluidos.forEach(k => delete window.ALIQUOTAS_IR[k]);
-        Object.assign(window.ALIQUOTAS_IR, extras);
-        excluidos.forEach(k => { if (!extras[k]) delete window.ALIQUOTAS_IR[k]; });
-        try {
-          localStorage.setItem('aliquota_extras',   JSON.stringify(extras));
-          localStorage.setItem('aliquota_excluidos', JSON.stringify(excluidos));
-        } catch(e) {}
-      }
-
-      // 4. Textos de docs complementares
-      const docsData = await fbGet('config', 'docs_complementares');
-      if (docsData) {
-        const textos = (docsData.textos && typeof docsData.textos === 'object') ? docsData.textos : {};
-        Object.entries(textos).forEach(([id, texto]) => {
-          for (const cat of Object.values(window.DOCS_COMPLEMENTARES)) {
-            const item = cat.find(i => i.id === id);
-            if (item) { item.texto = texto; }
-          }
-        });
-        try { localStorage.setItem('docscomp_textos', JSON.stringify(textos)); } catch(e) {}
-      }
-
-      // 5. Fornecedores simplificados
-      const simplifData = await fbGet('config', 'simplificados');
-      if (simplifData) {
-        const lista = Array.isArray(simplifData.lista) ? simplifData.lista : [];
-        try { localStorage.setItem('fornecedores_simplificados', JSON.stringify(lista)); } catch(e) {}
-      }
-
-    } catch(e) {
-      console.error('Erro ao carregar Firestore:', e);
-    } finally {
-      mostrarLoadingFirebase(false);
+    // 1. Fornecedores extras e excluídos
+    const fornecData = await fbGet('config', 'fornecedores');
+    if (fornecData) {
+      const extras    = (fornecData.extras && typeof fornecData.extras === 'object') ? fornecData.extras : {};
+      const excluidos = Array.isArray(fornecData.excluidos) ? fornecData.excluidos : [];
+      excluidos.forEach(c => delete window.FORNECEDORES[c]);
+      Object.assign(window.FORNECEDORES, extras);
+      excluidos.forEach(c => { if (!extras[c]) delete window.FORNECEDORES[c]; });
+      try {
+        localStorage.setItem('fornecedores_extras',    JSON.stringify(extras));
+        localStorage.setItem('fornecedores_excluidos', JSON.stringify(excluidos));
+      } catch(e) {}
     }
-  }
 
+    // 2. Isenções IR
+    const irData = await fbGet('config', 'isencoes_ir');
+    if (irData) {
+      const extras    = (irData.extras && typeof irData.extras === 'object') ? irData.extras : {};
+      const excluidos = Array.isArray(irData.excluidos) ? irData.excluidos : [];
+      excluidos.forEach(k => delete window.ISENCOES_IR[k]);
+      Object.assign(window.ISENCOES_IR, extras);
+      excluidos.forEach(k => { if (!extras[k]) delete window.ISENCOES_IR[k]; });
+      try {
+        localStorage.setItem('ir_extras',   JSON.stringify(extras));
+        localStorage.setItem('ir_excluidos', JSON.stringify(excluidos));
+      } catch(e) {}
+    }
+
+    // 3. Alíquotas IR
+    const aliqData = await fbGet('config', 'aliquotas_ir');
+    if (aliqData) {
+      const extras    = (aliqData.extras && typeof aliqData.extras === 'object') ? aliqData.extras : {};
+      const excluidos = Array.isArray(aliqData.excluidos) ? aliqData.excluidos : [];
+      excluidos.forEach(k => delete window.ALIQUOTAS_IR[k]);
+      Object.assign(window.ALIQUOTAS_IR, extras);
+      excluidos.forEach(k => { if (!extras[k]) delete window.ALIQUOTAS_IR[k]; });
+      try {
+        localStorage.setItem('aliquota_extras',   JSON.stringify(extras));
+        localStorage.setItem('aliquota_excluidos', JSON.stringify(excluidos));
+      } catch(e) {}
+    }
+
+    // 4. Textos de docs complementares
+    const docsData = await fbGet('config', 'docs_complementares');
+    if (docsData) {
+      const textos = (docsData.textos && typeof docsData.textos === 'object') ? docsData.textos : {};
+      Object.entries(textos).forEach(([id, texto]) => {
+        for (const cat of Object.values(window.DOCS_COMPLEMENTARES)) {
+          const item = cat.find(i => i.id === id);
+          if (item) { item.texto = texto; }
+        }
+      });
+      try { localStorage.setItem('docscomp_textos', JSON.stringify(textos)); } catch(e) {}
+    }
+
+    // 5. Fornecedores simplificados
+    const simplifData = await fbGet('config', 'simplificados');
+    if (simplifData) {
+      const lista = Array.isArray(simplifData.lista) ? simplifData.lista : [];
+      try { localStorage.setItem('fornecedores_simplificados', JSON.stringify(lista)); } catch(e) {}
+    }
+
+  } catch(e) {
+    console.error('Erro ao carregar Firestore:', e);
+  } finally {
+    mostrarLoadingFirebase(false);
+  }
+}
   function mostrarLoadingFirebase(ativo) {
     let el = document.getElementById('firebase-loading');
     if (!el) return;
