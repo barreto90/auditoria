@@ -166,31 +166,19 @@ const ModuloEmpenhos = (() => {
         let cnpj = '';
         let razaoSocial = '';
 
-        // Padrão: "Credor" seguido de CNPJ e razão social
-        const regexCredor = /Credor\s+([0-9.\/\-]+)\s+([A-Z\s\-\.]+?)(?=\n|Endereço|Gestão)/i;
+        // Padrão: CNPJ no formato XX.XXX.XXX/XXXX-XX ou sem pontos
+        // Seguido de razão social na mesma linha ou próxima
+        const regexCredor = /([0-9]{2}\.?[0-9]{3}\.?[0-9]{3}\/?\d{4}\-?[0-9]{2})\s+([A-Z\s\-\.]+?)(?=\n|Endereço|Gestão)/i;
         const matchCredor = texto.match(regexCredor);
 
         if (matchCredor) {
+            // Limpa e formata CNPJ
             cnpj = matchCredor[1].replace(/\D/g, '');
             cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
             
             // Tenta buscar no banco FORNECEDORES
             if (window.FORNECEDORES && window.FORNECEDORES[cnpj]) {
                 razaoSocial = window.FORNECEDORES[cnpj];
-            } else {
-                // Se não estiver no banco, deixa vazio
-                razaoSocial = '';
-            }
-        } else {
-            // Tenta encontrar CNPJ sozinho
-            const regexCNPJ = /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/;
-            const matchCNPJ = texto.match(regexCNPJ);
-            if (matchCNPJ) {
-                cnpj = matchCNPJ[1] + '.' + matchCNPJ[2] + '.' + matchCNPJ[3] + '/' + matchCNPJ[4] + '-' + matchCNPJ[5];
-                
-                if (window.FORNECEDORES && window.FORNECEDORES[cnpj]) {
-                    razaoSocial = window.FORNECEDORES[cnpj];
-                }
             }
         }
 
@@ -222,12 +210,20 @@ const ModuloEmpenhos = (() => {
     };
 
     const extrairTemContrato = (texto) => {
-        // Procura por "Contrato" seguido de número (padrão: YYYYCTXXXXXX)
+        // Procura por "Contrato" seguido de número no padrão YYYYCTXXXXXX
+        // Exemplo: 2024CT010743
         const regex = /Contrato\s+([0-9]{4}CT[0-9]{6})/i;
         const match = texto.match(regex);
         
-        // Se encontrou número do contrato, retorna true
-        return !!match;
+        if (match && match[1]) {
+            return true;
+        }
+
+        // Alternativa: procura por padrão sem "Contrato" explícito
+        const regexAlternativo = /(\d{4}CT\d{6})/;
+        const matchAlt = texto.match(regexAlternativo);
+        
+        return !!matchAlt;
     };
 
     const extrairTemEmenda = (texto) => {
@@ -275,7 +271,7 @@ const ModuloEmpenhos = (() => {
                             <th>CNPJ</th>
                             <th>Razão Social</th>
                             <th>Contrato</th>
-                            <th>Emenda</th>
+                            <th>Histórico</th>
                             <th>Status</th>
                             <th>Ações</th>
                         </tr>
@@ -302,6 +298,9 @@ const ModuloEmpenhos = (() => {
         const duplicado = empenhosDuplicados.get(empenho.numero);
         const statusClass = duplicado ? 'duplicado' : 'novo';
         const statusTexto = duplicado ? '⚠️ Duplicado' : '✓ Novo';
+        const historicoPreview = Array.isArray(empenho.historico) 
+            ? empenho.historico[0].substring(0, 30) + '...' 
+            : 'Sem descrição';
 
         return `
             <tr class="linha-${statusClass}" data-index="${idx}">
@@ -310,7 +309,7 @@ const ModuloEmpenhos = (() => {
                 <td>${empenho.credor.cnpj}</td>
                 <td>${empenho.credor.razao_social || '(sem nome)'}</td>
                 <td>${empenho.tem_contrato ? '✓' : '—'}</td>
-                <td>${empenho.tem_emenda ? '✓' : '—'}</td>
+                <td title="${historicoPreview}">${historicoPreview}</td>
                 <td><span class="status ${statusClass}">${statusTexto}</span></td>
                 <td>
                     <button class="btn-mini" id="btn-editar-${idx}" title="Editar">✎</button>
