@@ -96,8 +96,8 @@ const ModuloEmpenhos = (() => {
         const erros = [];
         const empenhos = [];
 
-        // Padrão: "Número" seguido do número de empenho (XXXXNE000000)
-        const padraoNumero = /Número\s+(\d{4}NE\d{6})/g;
+        // Padrão: número com 4 dígitos + NE + 6 dígitos (exemplo: 2026NE000001)
+        const padraoNumero = /(\d{4}NE\d{6})/g;
         const matches = [...texto.matchAll(padraoNumero)];
 
         if (matches.length === 0) {
@@ -110,7 +110,7 @@ const ModuloEmpenhos = (() => {
 
         matches.forEach((match, idx) => {
             try {
-                const numero = match[1];
+                const numero = match[0];
                 const posicao = match.index;
                 
                 // Extrai um trecho GRANDE (8000 chars) para ter todo o contexto
@@ -132,7 +132,7 @@ const ModuloEmpenhos = (() => {
             } catch (e) {
                 erros.push({
                     tipo: 'ERRO',
-                    empenho: match[1],
+                    empenho: match[0],
                     mensagem: e.message
                 });
             }
