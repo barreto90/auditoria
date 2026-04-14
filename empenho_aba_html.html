@@ -1,0 +1,156 @@
+<!-- ABA EMPENHO - Inserir no arquivo HTML principal -->
+
+<div id="aba-empenho" class="aba-conteudo" style="display: none;">
+    <div class="aba-empenho">
+        
+        <!-- Notificações -->
+        <div id="notificacoes"></div>
+
+        <!-- Carregamento -->
+        <div id="carregando">
+            <div style="text-align: center;">
+                <div class="spinner"></div>
+                <div class="carregando-texto">Processando...</div>
+            </div>
+        </div>
+
+        <!-- SEÇÃO 1: Upload e Processamento -->
+        <div class="secao-empenho">
+            <div class="secao-titulo">📄 Upload de Notas de Empenho (SIGEF)</div>
+            
+            <div class="upload-area" onclick="document.getElementById('input-pdf').click();">
+                <div style="font-size: 48px; margin-bottom: 10px;">📁</div>
+                <div style="font-size: 16px; margin-bottom: 5px;">Clique para selecionar ou arraste um PDF</div>
+                <div style="font-size: 12px; color: #666;">
+                    Aceita múltiplas notas de empenho em um único arquivo
+                </div>
+            </div>
+            
+            <input type="file" id="input-pdf" accept=".pdf">
+            <div id="nome-arquivo">Nenhum arquivo selecionado</div>
+            
+            <div class="btn-grupo">
+                <button id="btn-processar" class="btn-primario" disabled>🔄 Processar PDF</button>
+                <button id="btn-limpar" class="btn-secundario">🗑️ Limpar</button>
+            </div>
+        </div>
+
+        <!-- SEÇÃO 2: Erros e Avisos -->
+        <div id="lista-erros" style="display: none; margin: 20px 0;"></div>
+
+        <!-- SEÇÃO 3: Empenhos Extraídos -->
+        <div class="secao-empenho">
+            <div class="secao-titulo">📊 Empenhos Extraídos</div>
+            <div id="tabela-empenhos-container"></div>
+            
+            <div class="btn-grupo" style="margin-top: 20px;">
+                <button id="btn-salvar-todos" class="btn-sucesso">💾 Salvar Todos no Banco</button>
+            </div>
+        </div>
+
+        <!-- SEÇÃO 4: Empenhos Salvos -->
+        <div class="secao-empenho">
+            <div class="secao-titulo">✅ Empenhos Cadastrados</div>
+            <div id="tabela-salvos-container"></div>
+        </div>
+
+    </div>
+</div>
+
+<!-- MODAL: Editar Empenho -->
+<div id="modal-editar-empenho" class="modal">
+    <div class="modal-conteudo">
+        <span class="modal-fechar" onclick="document.getElementById('modal-editar-empenho').style.display='none'">&times;</span>
+        
+        <div class="modal-titulo">✏️ Editar Empenho</div>
+        
+        <div class="form-grupo">
+            <label for="edit-numero">Número do Empenho *</label>
+            <input type="text" id="edit-numero" readonly>
+        </div>
+
+        <div class="form-grupo">
+            <label for="edit-data">Data de Referência *</label>
+            <input type="text" id="edit-data" placeholder="dd/mm/yyyy">
+        </div>
+
+        <div class="form-grupo">
+            <label for="edit-cnpj">CNPJ do Credor *</label>
+            <input type="text" id="edit-cnpj" placeholder="00.000.000/0000-00">
+        </div>
+
+        <div class="form-grupo">
+            <label for="edit-razao">Razão Social do Credor *</label>
+            <input type="text" id="edit-razao" placeholder="Nome da empresa">
+        </div>
+
+        <div class="form-grupo">
+            <label for="edit-historico">Histórico / Descrição *</label>
+            <textarea id="edit-historico" placeholder="Descrição da despesa"></textarea>
+        </div>
+
+        <div class="form-grupo checkbox">
+            <input type="checkbox" id="edit-contrato">
+            <label for="edit-contrato" style="margin: 0;">Possui Contrato?</label>
+        </div>
+
+        <div class="form-grupo checkbox">
+            <input type="checkbox" id="edit-emenda">
+            <label for="edit-emenda" style="margin: 0;">Possui Emenda Parlamentar?</label>
+        </div>
+
+        <div class="form-grupo">
+            <label for="edit-evento">Evento / Tipo de Empenho</label>
+            <input type="text" id="edit-evento" readonly placeholder="Emissão de Empenho da Despesa">
+        </div>
+
+        <div class="btn-grupo">
+            <button id="btn-salvar-edicao" class="btn-sucesso">💾 Salvar Edição</button>
+            <button class="btn-secundario" onclick="document.getElementById('modal-editar-empenho').style.display='none'">❌ Cancelar</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL: Duplicado -->
+<div id="modal-duplicado" class="modal">
+    <div class="modal-conteudo" style="max-width: 500px;">
+        <div class="modal-titulo">⚠️ Empenho Duplicado</div>
+        
+        <p style="margin-bottom: 15px; color: #666;">
+            O empenho <strong id="dup-numero"></strong> já existe no banco de dados.
+        </p>
+
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+            <tr>
+                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Campo</th>
+                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Novo</th>
+                <th style="text-align: left; padding: 8px; border-bottom: 1px solid #ddd;">Existente</th>
+            </tr>
+            <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #ddd;">Data Referência</td>
+                <td style="padding: 8px; border-bottom: 1px solid #ddd;" id="dup-novo-data"></td>
+                <td style="padding: 8px; border-bottom: 1px solid #ddd;" id="dup-existe-data"></td>
+            </tr>
+        </table>
+
+        <div class="btn-grupo">
+            <button id="btn-atualizar" class="btn-sucesso" style="flex: 1;">🔄 Atualizar Existente</button>
+            <button id="btn-ignorar" class="btn-secundario" style="flex: 1;">⏭️ Ignorar Novo</button>
+        </div>
+    </div>
+</div>
+
+<!-- Fechar modais ao clicar fora -->
+<script>
+window.onclick = function(event) {
+    const modal1 = document.getElementById('modal-editar-empenho');
+    const modal2 = document.getElementById('modal-duplicado');
+    
+    if (event.target == modal1) {
+        modal1.style.display = 'none';
+    }
+    if (event.target == modal2) {
+        modal2.style.display = 'none';
+    }
+}
+</script>
