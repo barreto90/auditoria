@@ -1,6 +1,6 @@
 /**
  * Módulo de Empenhos - Versão GitHub (sem backend)
- * Extrai dados completos de PDFs SIGEF
+ * Extrai dados de PDFs SIGEF com padrão correto
  */
 
 const ModuloEmpenhos = (() => {
@@ -89,16 +89,16 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // EXTRAÇÃO APRIMORADA DE DADOS
+    // EXTRAÇÃO OTIMIZADA BASEADA NO PADRÃO SIGEF
     // ========================================================================
 
     const extrairEmpenhos = (texto) => {
         const erros = [];
         const empenhos = [];
 
-        // Divide por empenhos usando padrão de número
-        const padraoEmpenho = /(\d{4}NE\d{6})/g;
-        const matches = [...texto.matchAll(padraoEmpenho)];
+        // Padrão: "Número" seguido do número de empenho (XXXXNE000000)
+        const padraoNumero = /Número\s+(\d{4}NE\d{6})/g;
+        const matches = [...texto.matchAll(padraoNumero)];
 
         if (matches.length === 0) {
             erros.push({
@@ -110,29 +110,29 @@ const ModuloEmpenhos = (() => {
 
         matches.forEach((match, idx) => {
             try {
-                const numero = match[0];
+                const numero = match[1];
                 const posicao = match.index;
                 
-                // Extrai um trecho ao redor do número para análise
-                const inicio = Math.max(0, posicao - 2000);
-                const fim = Math.min(texto.length, posicao + 5000);
+                // Extrai um trecho GRANDE (8000 chars) para ter todo o contexto
+                const inicio = Math.max(0, posicao - 1000);
+                const fim = Math.min(texto.length, posicao + 7000);
                 const trecho = texto.substring(inicio, fim);
 
                 const empenho = {
                     numero: numero,
-                    data_referencia: extrairData(trecho, numero) || '01/01/2026',
-                    credor: extrairCredor(trecho, numero),
-                    historico: extrairHistorico(trecho, numero),
-                    tem_contrato: extrairTemContrato(trecho, numero),
-                    tem_emenda: extrairTemEmenda(trecho, numero),
-                    evento: extrairEvento(trecho, numero) || 'Emissão de Empenho da Despesa'
+                    data_referencia: extrairDataReferencia(trecho),
+                    credor: extrairCredor(trecho),
+                    historico: extrairHistorico(trecho),
+                    tem_contrato: extrairTemContrato(trecho),
+                    tem_emenda: extrairTemEmenda(trecho),
+                    evento: extrairEvento(trecho)
                 };
 
                 empenhos.push(empenho);
             } catch (e) {
                 erros.push({
                     tipo: 'ERRO',
-                    empenho: match[0],
+                    empenho: match[1],
                     mensagem: e.message
                 });
             }
@@ -141,35 +141,43 @@ const ModuloEmpenhos = (() => {
         return { empenhos, erros };
     };
 
-    const extrairData = (texto, numero) => {
-        // Procura por padrão de data (DD/MM/YYYY)
-        const regex = /(\d{2}\/\d{2}\/\d{4})/;
+    // ========================================================================
+    // EXTRAÇÃO DE CAMPOS INDIVIDUAIS
+    // ========================================================================
+
+    const extrairDataReferencia = (texto) => {
+        // "Data Referência" seguida de data DD/MM/YYYY
+        const regex = /Data\s+Referência\s+(\d{2}\/\d{2}\/\d{4})/i;
         const match = texto.match(regex);
-        return match ? match[1] : null;
+        return match ? match[1] : '01/01/2026';
     };
 
-    const extrairCredor = (texto, numero) => {
-        // Procura por CNPJ ou CPF
-        const regexCNPJ = /(\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}|\d{14})/;
-        const matchCNPJ = texto.match(regexCNPJ);
-        
+    const extrairCredor = (texto) => {
         let cnpj = '';
-        if (matchCNPJ) {
-            cnpj = matchCNPJ[1].replace(/\D/g, '');
+        let razaoSocial = 'Não informado';
+
+        // Padrão: "Credor" seguido de CNPJ e razão social na linha seguinte
+        const regexCredor = /Credor\s+(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})\s*-?\s*([A-Z\s\-\.]+?)(?=\n|Endereço|$)/i;
+        const matchCredor = texto.match(regexCredor);
+
+        if (matchCredor) {
+            cnpj = matchCredor[1].replace(/\D/g, '');
             cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-        }
+            razaoSocial = matchCredor[2].trim().substring(0, 100);
+        } else {
+            // Tenta encontrar CNPJ solto
+            const regexCNPJ = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})/;
+            const matchCNPJ = texto.match(regexCNPJ);
+            if (matchCNPJ) {
+                cnpj = matchCNPJ[1].replace(/\D/g, '');
+                cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+            }
 
-        // Procura por razão social (nome da empresa)
-        const regexRazao = /(?:Razão Social|Credor|CNPJ)[^\n]*\n\s*([A-Z\s\-\.]+?)(?:\n|Endereço|$)/i;
-        const matchRazao = texto.match(regexRazao);
-        let razaoSocial = matchRazao ? matchRazao[1].trim().substring(0, 80) : 'Não informado';
-
-        // Tenta extrair razão social logo após CNPJ
-        if (!matchRazao || razaoSocial.length < 5) {
-            const regexAposCNPJ = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\s+([A-Z\s\-\.]{10,100})/;
-            const matchAposCNPJ = texto.match(regexAposCNPJ);
-            if (matchAposCNPJ) {
-                razaoSocial = matchAposCNPJ[1].trim().substring(0, 80);
+            // Tenta encontrar razão social após CNPJ
+            const regexRazaoAposCNPJ = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\s+([A-Z\s\-\.]{10,150}?)(?=\n|AVENIDA|Endereço|$)/i;
+            const matchRazao = texto.match(regexRazaoAposCNPJ);
+            if (matchRazao) {
+                razaoSocial = matchRazao[1].trim().substring(0, 100);
             }
         }
 
@@ -179,73 +187,75 @@ const ModuloEmpenhos = (() => {
         };
     };
 
-    const extrairHistorico = (texto, numero) => {
+    const extrairHistorico = (texto) => {
         const historicos = [];
-        
-        // Padrão 1: Após "Histórico"
-        const regexHistorico = /Histórico[^\n]*\n\s*([^\n]+)/gi;
-        let match;
-        while ((match = regexHistorico.exec(texto)) !== null) {
-            const hist = match[1].trim();
-            if (hist.length > 5 && !hist.includes('http')) {
-                historicos.push(hist);
-            }
-        }
 
-        // Padrão 2: Procura por descrição de despesa
-        const regexDescricao = /(?:Descrição|Objeto)[^\n]*\n\s*([^\n]+)/i;
-        const matchDescricao = texto.match(regexDescricao);
-        if (matchDescricao) {
-            const desc = matchDescricao[1].trim();
-            if (desc.length > 5) {
-                historicos.push(desc);
-            }
+        // "Histórico" seguido do texto até próxima seção
+        const regexHistorico = /Histórico\s*\n\s*([^\n]+(?:\n(?!Unidade|Gestão|Complemento|Credor).*)*)/i;
+        const matchHistorico = texto.match(regexHistorico);
+
+        if (matchHistorico) {
+            const hist = matchHistorico[1].trim();
+            // Divide em linhas e remove vazias
+            const linhas = hist.split('\n')
+                .map(l => l.trim())
+                .filter(l => l.length > 5 && !l.includes('http'))
+                .slice(0, 3); // Máximo 3 linhas
+            
+            historicos.push(...linhas);
         }
 
         return historicos.length > 0 ? historicos : ['Sem descrição'];
     };
 
-    const extrairTemContrato = (texto, numero) => {
-        // Procura por palavra "Contrato" seguido de um número
-        const regex = /Contrato\s*(?:n(?:º|o)?\.?|número)?\s*[:=]?\s*(\d+[A-Z]*\d*|\S+)/i;
+    const extrairTemContrato = (texto) => {
+        // Procura por "Contrato" seguido de número (padrão: 2024CT011115)
+        const regex = /Contrato\s+(\d{4}CT\d{6}|[A-Z0-9\-\/]+)/i;
         const match = texto.match(regex);
-        
+
         if (match) {
             const contrato = match[1].trim();
-            // Verifica se não é "não" ou vazio
-            return !contrato.toLowerCase().includes('não') && contrato.length > 0;
+            return contrato && contrato !== 'Não' && contrato.length > 2;
         }
-        
+
         return false;
     };
 
-    const extrairTemEmenda = (texto, numero) => {
+    const extrairTemEmenda = (texto) => {
         // Procura por "Emenda Parlamentar" ou "Emenda"
-        const regex = /Emenda\s*(?:Parlamentar)?\s*[:=]?\s*([^\n]+)/i;
+        const regex = /Emenda\s+Parlamentar\s+([^\n]+)/i;
         const match = texto.match(regex);
-        
+
         if (match) {
             const emenda = match[1].trim();
-            return emenda.length > 3 && !emenda.toLowerCase().includes('não');
+            // Se tem valor e não é "Não" ou vazio
+            return emenda.length > 2 && !emenda.toLowerCase().includes('não');
         }
-        
-        return texto.toLowerCase().includes('emenda parlamentar');
+
+        // Fallback: procura por "Emenda:" (pode ter SIM/NÃO)
+        const regexSimples = /Emenda\s*[:=]\s*(Sim|SIM|Não|NÃO|[A-Z0-9]+)/i;
+        const matchSimples = texto.match(regexSimples);
+
+        if (matchSimples) {
+            return !matchSimples[1].toLowerCase().includes('não');
+        }
+
+        return false;
     };
 
-    const extrairEvento = (texto, numero) => {
-        // Procura por "Evento" ou "Tipo de Empenho"
-        const regex = /(?:Evento|Tipo de Empenho)\s*[:=]?\s*([^\n]+)/i;
+    const extrairEvento = (texto) => {
+        // Procura por "Evento" seguido da descrição
+        const regex = /Evento\s+([A-Z0-9\-\s]+?)(?=\n|Credor|$)/i;
         const match = texto.match(regex);
-        
+
         if (match) {
-            return match[1].trim().substring(0, 100);
+            const evento = match[1].trim().substring(0, 100);
+            if (evento.length > 5) {
+                return evento;
+            }
         }
-        
-        // Padrão comum no SIGEF
-        if (texto.toLowerCase().includes('emissão de empenho')) {
-            return 'Emissão de Empenho da Despesa';
-        }
-        
+
+        // Padrão padrão do SIGEF
         return 'Emissão de Empenho da Despesa';
     };
 
