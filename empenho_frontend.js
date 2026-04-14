@@ -1,11 +1,12 @@
 /**
- * Módulo de Empenhos - Versão GitHub (sem backend)
- * Extrai dados de PDFs SIGEF com padrão correto
+ * Módulo de Empenhos - Versão GitHub v2
+ * Corrigido: sem duplicatas, dados precisos, busca em FORNECEDORES
  */
 
 const ModuloEmpenhos = (() => {
     let empenhosDados = [];
     let empenhosDuplicados = new Map();
+    let empenhosDuplicatasInternas = new Set(); // Para evitar duplicatas no mesmo PDF
 
     const init = () => {
         console.log('ModuloEmpenhos inicializando...');
@@ -44,6 +45,7 @@ const ModuloEmpenhos = (() => {
 
         mostrarCarregamento(true);
         limparNotificacoes();
+        empenhosDuplicatasInternas.clear(); // Reset para novo PDF
 
         try {
             const arrayBuffer = await arquivo.arrayBuffer();
@@ -54,7 +56,7 @@ const ModuloEmpenhos = (() => {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
                 const pageText = textContent.items.map(item => item.str).join(' ');
-                textoCompleto += '\n--- PÁGINA ' + i + ' ---\n' + pageText;
+                textoCompleto += pageText + '\n';
             }
 
             const resultado = extrairEmpenhos(textoCompleto);
@@ -89,47 +91,56 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // EXTRAÇÃO OTIMIZADA BASEADA NO PADRÃO SIGEF
+    // EXTRAÇÃO DE DADOS - SEM DUPLICATAS
     // ========================================================================
 
     const extrairEmpenhos = (texto) => {
         const erros = [];
         const empenhos = [];
+        const numerosProcessados = new Set(); // Evita duplicatas
 
-        // Padrão: número com 4 dígitos + NE + 6 dígitos (exemplo: 2026NE000001)
+        // Padrão: número com 4 dígitos + NE + 6 dígitos
         const padraoNumero = /(\d{4}NE\d{6})/g;
         const matches = [...texto.matchAll(padraoNumero)];
 
         if (matches.length === 0) {
             erros.push({
                 tipo: 'AVISO',
-                mensagem: 'Nenhum empenho encontrado. Certifique-se que é um PDF SIGEF válido.'
+                mensagem: 'Nenhum empenho encontrado no PDF.'
             });
             return { empenhos: [], erros };
         }
 
-        matches.forEach((match, idx) => {
+        matches.forEach((match) => {
             try {
                 const numero = match[0];
+
+                // IMPORTANTE: Não processa se já vimos este número neste PDF
+                if (numerosProcessados.has(numero)) {
+                    return; // Pula duplicata
+                }
+                numerosProcessados.add(numero);
+
                 const posicao = match.index;
                 
-                // Extrai um trecho GRANDE (8000 chars) para ter todo o contexto
-                const inicio = Math.max(0, posicao - 1000);
-                const fim = Math.min(texto.length, posicao + 7000);
-                const trecho = texto.substring(inicio, fim);
+                // Extrai bloco ao redor para ter contexto completo
+                const inicio = Math.max(0, posicao - 500);
+                const fim = Math.min(texto.length, posicao + 6000);
+                const blocoEmpenho = texto.substring(inicio, fim);
 
                 const empenho = {
                     numero: numero,
-                    data_referencia: extrairDataReferencia(trecho),
-                    credor: extrairCredor(trecho),
-                    historico: extrairHistorico(trecho),
-                    tem_contrato: extrairTemContrato(trecho),
-                    tem_emenda: extrairTemEmenda(trecho),
-                    evento: extrairEvento(trecho)
+                    data_referencia: extrairDataReferencia(blocoEmpenho),
+                    credor: extrairCredor(blocoEmpenho),
+                    historico: extrairHistorico(texto, posicao), // Busca no texto inteiro
+                    tem_contrato: extrairTemContrato(blocoEmpenho),
+                    tem_emenda: extrairTemEmenda(blocoEmpenho),
+                    evento: 'Emissão de Empenho da Despesa'
                 };
 
                 empenhos.push(empenho);
             } catch (e) {
+                console.error('Erro ao processar empenho:', e);
                 erros.push({
                     tipo: 'ERRO',
                     empenho: match[0],
@@ -142,11 +153,10 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // EXTRAÇÃO DE CAMPOS INDIVIDUAIS
+    // EXTRAÇÃO DE CAMPOS
     // ========================================================================
 
     const extrairDataReferencia = (texto) => {
-        // "Data Referência" seguida de data DD/MM/YYYY
         const regex = /Data\s+Referência\s+(\d{2}\/\d{2}\/\d{4})/i;
         const match = texto.match(regex);
         return match ? match[1] : '01/01/2026';
@@ -154,30 +164,33 @@ const ModuloEmpenhos = (() => {
 
     const extrairCredor = (texto) => {
         let cnpj = '';
-        let razaoSocial = 'Não informado';
+        let razaoSocial = '';
 
-        // Padrão: "Credor" seguido de CNPJ e razão social na linha seguinte
-        const regexCredor = /Credor\s+(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})\s*-?\s*([A-Z\s\-\.]+?)(?=\n|Endereço|$)/i;
+        // Padrão: "Credor" seguido de CNPJ e razão social
+        const regexCredor = /Credor\s+([0-9.\/\-]+)\s+([A-Z\s\-\.]+?)(?=\n|Endereço|Gestão)/i;
         const matchCredor = texto.match(regexCredor);
 
         if (matchCredor) {
             cnpj = matchCredor[1].replace(/\D/g, '');
             cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-            razaoSocial = matchCredor[2].trim().substring(0, 100);
+            
+            // Tenta buscar no banco FORNECEDORES
+            if (window.FORNECEDORES && window.FORNECEDORES[cnpj]) {
+                razaoSocial = window.FORNECEDORES[cnpj];
+            } else {
+                // Se não estiver no banco, deixa vazio
+                razaoSocial = '';
+            }
         } else {
-            // Tenta encontrar CNPJ solto
-            const regexCNPJ = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{14})/;
+            // Tenta encontrar CNPJ sozinho
+            const regexCNPJ = /(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/;
             const matchCNPJ = texto.match(regexCNPJ);
             if (matchCNPJ) {
-                cnpj = matchCNPJ[1].replace(/\D/g, '');
-                cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-            }
-
-            // Tenta encontrar razão social após CNPJ
-            const regexRazaoAposCNPJ = /\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}\s+([A-Z\s\-\.]{10,150}?)(?=\n|AVENIDA|Endereço|$)/i;
-            const matchRazao = texto.match(regexRazaoAposCNPJ);
-            if (matchRazao) {
-                razaoSocial = matchRazao[1].trim().substring(0, 100);
+                cnpj = matchCNPJ[1] + '.' + matchCNPJ[2] + '.' + matchCNPJ[3] + '/' + matchCNPJ[4] + '-' + matchCNPJ[5];
+                
+                if (window.FORNECEDORES && window.FORNECEDORES[cnpj]) {
+                    razaoSocial = window.FORNECEDORES[cnpj];
+                }
             }
         }
 
@@ -187,76 +200,57 @@ const ModuloEmpenhos = (() => {
         };
     };
 
-    const extrairHistorico = (texto) => {
-        const historicos = [];
+    const extrairHistorico = (textoCompleto, posicaoNumero) => {
+        // Procura por "HISTÓRICO" em negrito (letra maiúscula e depois quebra de linha)
+        // Em seguida pega até encontrar a linha horizontal (sequência de dashes)
+        
+        const regex = /HISTÓRICO\s*\n([^]*?)(?=\-{10,}|Data\s+Referência|$)/i;
+        const match = textoCompleto.substring(posicaoNumero, posicaoNumero + 8000).match(regex);
 
-        // "Histórico" seguido do texto até próxima seção
-        const regexHistorico = /Histórico\s*\n\s*([^\n]+(?:\n(?!Unidade|Gestão|Complemento|Credor).*)*)/i;
-        const matchHistorico = texto.match(regexHistorico);
-
-        if (matchHistorico) {
-            const hist = matchHistorico[1].trim();
-            // Divide em linhas e remove vazias
-            const linhas = hist.split('\n')
+        if (match && match[1]) {
+            const texto = match[1]
+                .trim()
+                .split('\n')
                 .map(l => l.trim())
-                .filter(l => l.length > 5 && !l.includes('http'))
-                .slice(0, 3); // Máximo 3 linhas
+                .filter(l => l.length > 3)
+                .slice(0, 5) // Máximo 5 linhas
+                .join('\n');
             
-            historicos.push(...linhas);
+            return texto.length > 5 ? [texto] : ['Sem descrição'];
         }
 
-        return historicos.length > 0 ? historicos : ['Sem descrição'];
+        return ['Sem descrição'];
     };
 
     const extrairTemContrato = (texto) => {
-        // Procura por "Contrato" seguido de número (padrão: 2024CT011115)
-        const regex = /Contrato\s+(\d{4}CT\d{6}|[A-Z0-9\-\/]+)/i;
+        // Procura por "Tipo Contrato" ou "Contrato"
+        // Se tiver algo escrito embaixo = true, senão = false
+        
+        const regex = /(?:Tipo\s+)?Contrato\s*\n\s*([^\n]+)/i;
         const match = texto.match(regex);
 
-        if (match) {
-            const contrato = match[1].trim();
-            return contrato && contrato !== 'Não' && contrato.length > 2;
+        if (match && match[1]) {
+            const valor = match[1].trim();
+            // Se tem algo e não é vazio ou "Não"
+            return valor.length > 0 && !valor.toLowerCase().includes('não') && valor !== '—' && valor !== 'Não';
         }
 
         return false;
     };
 
     const extrairTemEmenda = (texto) => {
-        // Procura por "Emenda Parlamentar" ou "Emenda"
-        const regex = /Emenda\s+Parlamentar\s+([^\n]+)/i;
+        // Procura por "Emenda Parlamentar"
+        // Se tiver algo escrito embaixo = true, senão = false
+        
+        const regex = /Emenda\s+Parlamentar\s*\n\s*([^\n]+)/i;
         const match = texto.match(regex);
 
-        if (match) {
-            const emenda = match[1].trim();
-            // Se tem valor e não é "Não" ou vazio
-            return emenda.length > 2 && !emenda.toLowerCase().includes('não');
-        }
-
-        // Fallback: procura por "Emenda:" (pode ter SIM/NÃO)
-        const regexSimples = /Emenda\s*[:=]\s*(Sim|SIM|Não|NÃO|[A-Z0-9]+)/i;
-        const matchSimples = texto.match(regexSimples);
-
-        if (matchSimples) {
-            return !matchSimples[1].toLowerCase().includes('não');
+        if (match && match[1]) {
+            const valor = match[1].trim();
+            return valor.length > 0 && !valor.toLowerCase().includes('não') && valor !== '—' && valor !== 'Não';
         }
 
         return false;
-    };
-
-    const extrairEvento = (texto) => {
-        // Procura por "Evento" seguido da descrição
-        const regex = /Evento\s+([A-Z0-9\-\s]+?)(?=\n|Credor|$)/i;
-        const match = texto.match(regex);
-
-        if (match) {
-            const evento = match[1].trim().substring(0, 100);
-            if (evento.length > 5) {
-                return evento;
-            }
-        }
-
-        // Padrão padrão do SIGEF
-        return 'Emissão de Empenho da Despesa';
     };
 
     const verificarDuplicadoLocal = (numero) => {
@@ -265,7 +259,7 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // EXIBIÇÃO DE RESULTADOS
+    // EXIBIÇÃO
     // ========================================================================
 
     const exibirResultados = (resultado) => {
@@ -322,7 +316,7 @@ const ModuloEmpenhos = (() => {
                 <td>${empenho.numero}</td>
                 <td>${empenho.data_referencia}</td>
                 <td>${empenho.credor.cnpj}</td>
-                <td>${empenho.credor.razao_social}</td>
+                <td>${empenho.credor.razao_social || '(sem nome)'}</td>
                 <td>${empenho.tem_contrato ? '✓' : '—'}</td>
                 <td>${empenho.tem_emenda ? '✓' : '—'}</td>
                 <td><span class="status ${statusClass}">${statusTexto}</span></td>
@@ -334,10 +328,6 @@ const ModuloEmpenhos = (() => {
         `;
     };
 
-    // ========================================================================
-    // MODAL DE EDIÇÃO
-    // ========================================================================
-
     const abrirModalEditar = (empenho, idx) => {
         const modal = document.getElementById('modal-editar-empenho');
         if (!modal) return;
@@ -346,7 +336,7 @@ const ModuloEmpenhos = (() => {
             'edit-numero': empenho.numero,
             'edit-data': empenho.data_referencia,
             'edit-cnpj': empenho.credor.cnpj,
-            'edit-razao': empenho.credor.razao_social,
+            'edit-razao': empenho.credor.razao_social || '',
             'edit-historico': Array.isArray(empenho.historico) ? empenho.historico.join('\n') : empenho.historico || '',
             'edit-evento': empenho.evento
         };
@@ -393,22 +383,18 @@ const ModuloEmpenhos = (() => {
                 evento: document.getElementById('edit-evento')?.value || ''
             };
 
-            mostrarNotificacao('Empenho editado (não salvo ainda)', 'info');
+            mostrarNotificacao('Empenho editado', 'info');
             exibirResultados({ empenhos: empenhosDados });
         }
     };
 
     const removerEmpenho = (idx) => {
-        if (confirm('Tem certeza que quer remover este empenho?')) {
+        if (confirm('Remover este empenho?')) {
             empenhosDados.splice(idx, 1);
             exibirResultados({ empenhos: empenhosDados });
-            mostrarNotificacao('Empenho removido da listagem', 'info');
+            mostrarNotificacao('Empenho removido', 'info');
         }
     };
-
-    // ========================================================================
-    // SALVAR NO localStorage
-    // ========================================================================
 
     const salvarTodos = async () => {
         if (empenhosDados.length === 0) {
@@ -431,26 +417,21 @@ const ModuloEmpenhos = (() => {
             
             localStorage.setItem('empenhos_salvos', JSON.stringify(empenhosSalvos));
             
-            mostrarNotificacao('Todos os empenhos foram salvos com sucesso!', 'sucesso');
+            mostrarNotificacao('Empenhos salvos com sucesso!', 'sucesso');
             limpar();
             await carregarEmpenhos();
 
         } catch (erro) {
-            console.error(erro);
-            mostrarNotificacao(`Erro ao salvar: ${erro.message}`, 'erro');
+            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
         }
     };
-
-    // ========================================================================
-    // CARREGAMENTO DE EMPENHOS SALVOS
-    // ========================================================================
 
     const carregarEmpenhos = async () => {
         try {
             const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
             exibirTabelaSalvos(empenhos);
         } catch (erro) {
-            console.error('Erro ao carregar empenhos:', erro);
+            console.error('Erro ao carregar:', erro);
         }
     };
 
@@ -485,7 +466,7 @@ const ModuloEmpenhos = (() => {
                                 <td>${emp.numero}</td>
                                 <td>${emp.data_referencia}</td>
                                 <td>${emp.credor.cnpj}</td>
-                                <td>${emp.credor.razao_social}</td>
+                                <td>${emp.credor.razao_social || '(sem nome)'}</td>
                                 <td>${emp.tem_contrato ? '✓' : '—'}</td>
                                 <td>${emp.tem_emenda ? '✓' : '—'}</td>
                                 <td>
@@ -501,16 +482,10 @@ const ModuloEmpenhos = (() => {
         container.innerHTML = html;
     };
 
-    // ========================================================================
-    // UTILITÁRIOS
-    // ========================================================================
-
     const exibirErros = (erros) => {
         const container = document.getElementById('lista-erros');
         if (!container) return;
         
-        container.innerHTML = '';
-
         const html = erros.map(erro => `
             <div class="erro-item tipo-${erro.tipo.toLowerCase()}">
                 <strong>${erro.tipo}${erro.empenho ? ` [${erro.empenho}]` : ''}:</strong>
@@ -531,17 +506,13 @@ const ModuloEmpenhos = (() => {
         elemento.textContent = mensagem;
 
         container.appendChild(elemento);
-
-        setTimeout(() => {
-            elemento.remove();
-        }, 5000);
+        setTimeout(() => elemento.remove(), 5000);
     };
 
     const limparNotificacoes = () => {
         const notif = document.getElementById('notificacoes');
-        const erros = document.getElementById('lista-erros');
-        
         if (notif) notif.innerHTML = '';
+        const erros = document.getElementById('lista-erros');
         if (erros) erros.style.display = 'none';
     };
 
@@ -567,19 +538,17 @@ const ModuloEmpenhos = (() => {
     };
 
     const deletarEmpenho = (numero) => {
-        if (!confirm('Tem certeza que quer deletar este empenho?')) {
-            return;
-        }
+        if (!confirm('Deletar este empenho?')) return;
 
         try {
             const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
             const filtrados = empenhos.filter(e => e.numero !== numero);
             localStorage.setItem('empenhos_salvos', JSON.stringify(filtrados));
             
-            mostrarNotificacao('Empenho deletado com sucesso', 'sucesso');
+            mostrarNotificacao('Empenho deletado', 'sucesso');
             carregarEmpenhos();
         } catch (erro) {
-            mostrarNotificacao(`Erro ao deletar: ${erro.message}`, 'erro');
+            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
         }
     };
 
