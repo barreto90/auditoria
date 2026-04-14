@@ -1,10 +1,9 @@
 /**
- * Módulo de Empenhos - Notas Fiscais Beta
- * Extrai dados de PDFs SIGEF e gerencia registros
+ * Módulo de Empenhos - Versão GitHub (sem backend)
+ * Funciona 100% no navegador usando localStorage
  */
 
 const ModuloEmpenhos = (() => {
-    const API_URL = 'http://localhost:8000/api';
     let empenhosDados = [];
     let empenhosDuplicados = new Map();
 
@@ -15,18 +14,11 @@ const ModuloEmpenhos = (() => {
     const init = () => {
         console.log('ModuloEmpenhos inicializando...');
         
-        // Event listeners - verifica se elementos existem
+        // Event listeners
         const inputPdf = document.getElementById('input-pdf');
         const btnProcessar = document.getElementById('btn-processar');
         const btnSalvarTodos = document.getElementById('btn-salvar-todos');
         const btnLimpar = document.getElementById('btn-limpar');
-        
-        console.log('Elementos encontrados:', {
-            inputPdf: !!inputPdf,
-            btnProcessar: !!btnProcessar,
-            btnSalvarTodos: !!btnSalvarTodos,
-            btnLimpar: !!btnLimpar
-        });
         
         if (inputPdf) inputPdf.addEventListener('change', handleFileSelect);
         if (btnProcessar) btnProcessar.addEventListener('click', processarPDF);
@@ -36,7 +28,7 @@ const ModuloEmpenhos = (() => {
         // Carrega empenhos salvos
         carregarEmpenhos();
         
-        console.log('ModuloEmpenhos inicializado com sucesso!');
+        console.log('ModuloEmpenhos inicializado!');
     };
 
     // ========================================================================
@@ -61,37 +53,36 @@ const ModuloEmpenhos = (() => {
             return;
         }
 
-        const formData = new FormData();
-        formData.append('file', arquivo);
-
         mostrarCarregamento(true);
         limparNotificacoes();
 
         try {
-            const response = await fetch(`${API_URL}/processar-pdf`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!response.ok) {
-                throw new Error(`Erro HTTP ${response.status}`);
+            // Lê o PDF usando PDF.js
+            const arrayBuffer = await arquivo.arrayBuffer();
+            const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            
+            let textoCompleto = '';
+            for (let i = 1; i <= pdf.numPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map(item => item.str).join(' ');
+                textoCompleto += pageText + '\n';
             }
 
-            const resultado = await response.json();
-
-            // Processa empenhos extraídos
+            // Processa o texto
+            const resultado = extrairEmpenhos(textoCompleto);
+            
             empenhosDados = resultado.empenhos || [];
             empenhosDuplicados.clear();
 
-            // Verifica duplicados
+            // Verifica duplicados no localStorage
             for (const empenho of empenhosDados) {
-                const duplicado = await verificarDuplicado(empenho.numero);
+                const duplicado = verificarDuplicadoLocal(empenho.numero);
                 if (duplicado) {
                     empenhosDuplicados.set(empenho.numero, duplicado);
                 }
             }
 
-            // Exibe resultados
             exibirResultados(resultado);
 
             if (resultado.erros && resultado.erros.length > 0) {
@@ -112,20 +103,92 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // VERIFICAÇÃO DE DUPLICADOS
+    // EXTRAÇÃO DE DADOS DO PDF
     // ========================================================================
 
-    const verificarDuplicado = async (numero) => {
-        try {
-            const response = await fetch(`${API_URL}/empenhos`);
-            const dados = await response.json();
+    const extrairEmpenhos = (texto) => {
+        const erros = [];
+        const empenhos = [];
 
-            const encontrado = dados.empenhos.find(e => e.numero === numero);
-            return encontrado || null;
-        } catch (erro) {
-            console.error('Erro ao verificar duplicado:', erro);
-            return null;
+        // Padrão simples: procura por números que parecem ser empenhos
+        const padraoEmpenho = /(\d{4}NE\d{6})/g;
+        const matches = texto.match(padraoEmpenho);
+
+        if (!matches || matches.length === 0) {
+            erros.push({
+                tipo: 'AVISO',
+                mensagem: 'Nenhum empenho foi encontrado no PDF. Certifique-se que é um PDF SIGEF válido.'
+            });
+            return { empenhos: [], erros };
         }
+
+        // Para cada empenho encontrado, extrai dados básicos
+        const numerosUnicos = [...new Set(matches)];
+        
+        numerosUnicos.forEach((numero, idx) => {
+            try {
+                // Cria um empenho com dados mínimos
+                const empenho = {
+                    numero: numero,
+                    data_referencia: extrairData(texto, numero) || '01/01/2026',
+                    credor: {
+                        cnpj: extrairCNPJ(texto, numero) || '00.000.000/0000-00',
+                        razao_social: extrairRazaoSocial(texto, numero) || 'Não informado'
+                    },
+                    historico: [extrairHistorico(texto, numero) || 'Sem descrição'],
+                    tem_contrato: texto.includes('Contrato'),
+                    tem_emenda: texto.includes('Emenda'),
+                    evento: 'Emissão de Empenho da Despesa'
+                };
+
+                empenhos.push(empenho);
+            } catch (e) {
+                erros.push({
+                    tipo: 'ERRO',
+                    empenho: numero,
+                    mensagem: e.message
+                });
+            }
+        });
+
+        return { empenhos, erros };
+    };
+
+    const extrairData = (texto, numero) => {
+        const regex = new RegExp(`${numero}[\\s\\S]{0,200}(\\d{2}/\\d{2}/\\d{4})`, 'i');
+        const match = texto.match(regex);
+        return match ? match[1] : null;
+    };
+
+    const extrairCNPJ = (texto, numero) => {
+        const regex = new RegExp(`${numero}[\\s\\S]{0,500}(\\d{2}\\.\\d{3}\\.\\d{3}/\\d{4}-\\d{2}|\\d{14})`, 'i');
+        const match = texto.match(regex);
+        if (match) {
+            let cnpj = match[1].replace(/\D/g, '');
+            return cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+        }
+        return null;
+    };
+
+    const extrairRazaoSocial = (texto, numero) => {
+        const regex = new RegExp(`${numero}[\\s\\S]{0,200}([A-Z\\s]{10,100})`, 'i');
+        const match = texto.match(regex);
+        return match ? match[1].trim().substring(0, 50) : null;
+    };
+
+    const extrairHistorico = (texto, numero) => {
+        const regex = new RegExp(`${numero}[\\s\\S]{0,300}(Histórico[\\s\\S]{0,100})`, 'i');
+        const match = texto.match(regex);
+        return match ? match[1].substring(0, 100) : null;
+    };
+
+    // ========================================================================
+    // VERIFICAÇÃO DE DUPLICADOS (localStorage)
+    // ========================================================================
+
+    const verificarDuplicadoLocal = (numero) => {
+        const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+        return empenhos.find(e => e.numero === numero);
     };
 
     // ========================================================================
@@ -152,8 +215,6 @@ const ModuloEmpenhos = (() => {
                             <th>Data Ref.</th>
                             <th>CNPJ</th>
                             <th>Razão Social</th>
-                            <th>Contrato</th>
-                            <th>Emenda</th>
                             <th>Status</th>
                             <th>Ações</th>
                         </tr>
@@ -167,7 +228,6 @@ const ModuloEmpenhos = (() => {
 
         container.innerHTML = html;
 
-        // Event listeners para cada linha
         resultado.empenhos.forEach((emp, idx) => {
             const btnEditar = document.getElementById(`btn-editar-${idx}`);
             const btnRemover = document.getElementById(`btn-remover-${idx}`);
@@ -186,10 +246,8 @@ const ModuloEmpenhos = (() => {
             <tr class="linha-${statusClass}" data-index="${idx}">
                 <td>${empenho.numero}</td>
                 <td>${empenho.data_referencia}</td>
-                <td>${formatarCNPJ(empenho.credor.cnpj)}</td>
+                <td>${empenho.credor.cnpj}</td>
                 <td>${empenho.credor.razao_social}</td>
-                <td>${empenho.tem_contrato ? '✓' : '—'}</td>
-                <td>${empenho.tem_emenda ? '✓' : '—'}</td>
                 <td><span class="status ${statusClass}">${statusTexto}</span></td>
                 <td>
                     <button class="btn-mini" id="btn-editar-${idx}" title="Editar">✎</button>
@@ -207,7 +265,6 @@ const ModuloEmpenhos = (() => {
         const modal = document.getElementById('modal-editar-empenho');
         if (!modal) return;
         
-        // Preenche campos
         const elementos = {
             'edit-numero': empenho.numero,
             'edit-data': empenho.data_referencia,
@@ -221,13 +278,7 @@ const ModuloEmpenhos = (() => {
             const el = document.getElementById(id);
             if (el) el.value = value;
         }
-        
-        const checkContrato = document.getElementById('edit-contrato');
-        const checkEmenda = document.getElementById('edit-emenda');
-        if (checkContrato) checkContrato.checked = empenho.tem_contrato;
-        if (checkEmenda) checkEmenda.checked = empenho.tem_emenda;
 
-        // Botão de salvar
         const btnSalvar = document.getElementById('btn-salvar-edicao');
         if (btnSalvar) {
             btnSalvar.onclick = () => {
@@ -255,8 +306,8 @@ const ModuloEmpenhos = (() => {
                     razao_social: document.getElementById('edit-razao')?.value || ''
                 },
                 historico: historico.split('\n'),
-                tem_contrato: document.getElementById('edit-contrato')?.checked || false,
-                tem_emenda: document.getElementById('edit-emenda')?.checked || false,
+                tem_contrato: false,
+                tem_emenda: false,
                 evento: document.getElementById('edit-evento')?.value || ''
             };
 
@@ -274,7 +325,7 @@ const ModuloEmpenhos = (() => {
     };
 
     // ========================================================================
-    // SALVAR NO BANCO
+    // SALVAR NO localStorage
     // ========================================================================
 
     const salvarTodos = async () => {
@@ -283,24 +334,23 @@ const ModuloEmpenhos = (() => {
             return;
         }
 
-        mostrarCarregamento(true);
-
         try {
+            const empenhosSalvos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            
             for (const empenho of empenhosDados) {
-                const duplicado = empenhosDuplicados.get(empenho.numero);
-
-                if (duplicado) {
-                    const resultado = await perguntarDuplicado(empenho, duplicado);
-                    if (resultado === 'atualizar') {
-                        empenho.forcar_atualizacao = true;
-                    } else if (resultado === 'ignorar') {
-                        continue;
-                    }
+                const indice = empenhosSalvos.findIndex(e => e.numero === empenho.numero);
+                
+                if (indice >= 0) {
+                    // Atualiza existente
+                    empenhosSalvos[indice] = empenho;
+                } else {
+                    // Adiciona novo
+                    empenhosSalvos.push(empenho);
                 }
-
-                await salvarEmpenho(empenho);
             }
-
+            
+            localStorage.setItem('empenhos_salvos', JSON.stringify(empenhosSalvos));
+            
             mostrarNotificacao('Todos os empenhos foram salvos com sucesso!', 'sucesso');
             limpar();
             await carregarEmpenhos();
@@ -308,62 +358,7 @@ const ModuloEmpenhos = (() => {
         } catch (erro) {
             console.error(erro);
             mostrarNotificacao(`Erro ao salvar: ${erro.message}`, 'erro');
-        } finally {
-            mostrarCarregamento(false);
         }
-    };
-
-    const salvarEmpenho = async (empenho) => {
-        const response = await fetch(`${API_URL}/salvar-empenhos`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ empenhos: [empenho] })
-        });
-
-        if (!response.ok) {
-            throw new Error(`Erro ao salvar empenho ${empenho.numero}`);
-        }
-
-        return response.json();
-    };
-
-    const perguntarDuplicado = (novo, existente) => {
-        return new Promise((resolve) => {
-            const modal = document.getElementById('modal-duplicado');
-            if (!modal) {
-                resolve('ignorar');
-                return;
-            }
-            
-            const numEl = document.getElementById('dup-numero');
-            const novaDataEl = document.getElementById('dup-novo-data');
-            const existeDataEl = document.getElementById('dup-existe-data');
-            
-            if (numEl) numEl.textContent = novo.numero;
-            if (novaDataEl) novaDataEl.textContent = novo.data_referencia;
-            if (existeDataEl) existeDataEl.textContent = existente.data_referencia;
-
-            const btnAtualizar = document.getElementById('btn-atualizar');
-            const btnIgnorar = document.getElementById('btn-ignorar');
-            
-            if (btnAtualizar) {
-                btnAtualizar.onclick = () => {
-                    modal.style.display = 'none';
-                    resolve('atualizar');
-                };
-            }
-            
-            if (btnIgnorar) {
-                btnIgnorar.onclick = () => {
-                    modal.style.display = 'none';
-                    resolve('ignorar');
-                };
-            }
-
-            modal.style.display = 'block';
-        });
     };
 
     // ========================================================================
@@ -372,10 +367,8 @@ const ModuloEmpenhos = (() => {
 
     const carregarEmpenhos = async () => {
         try {
-            const response = await fetch(`${API_URL}/empenhos`);
-            const dados = await response.json();
-
-            exibirTabelaSalvos(dados.empenhos || []);
+            const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            exibirTabelaSalvos(empenhos);
         } catch (erro) {
             console.error('Erro ao carregar empenhos:', erro);
         }
@@ -401,8 +394,6 @@ const ModuloEmpenhos = (() => {
                             <th>Data</th>
                             <th>CNPJ</th>
                             <th>Razão Social</th>
-                            <th>Contrato</th>
-                            <th>Emenda</th>
                             <th>Ações</th>
                         </tr>
                     </thead>
@@ -411,10 +402,8 @@ const ModuloEmpenhos = (() => {
                             <tr>
                                 <td>${emp.numero}</td>
                                 <td>${emp.data_referencia}</td>
-                                <td>${formatarCNPJ(emp.cnpj)}</td>
-                                <td>${emp.razao_social}</td>
-                                <td>${emp.tem_contrato ? '✓' : '—'}</td>
-                                <td>${emp.tem_emenda ? '✓' : '—'}</td>
+                                <td>${emp.credor.cnpj}</td>
+                                <td>${emp.credor.razao_social}</td>
                                 <td>
                                     <button class="btn-mini" onclick="ModuloEmpenhos.deletarEmpenho('${emp.numero}')" title="Deletar">🗑</button>
                                 </td>
@@ -493,26 +482,18 @@ const ModuloEmpenhos = (() => {
         limparNotificacoes();
     };
 
-    const formatarCNPJ = (cnpj) => {
-        if (!cnpj) return '';
-        const limpo = cnpj.replace(/\D/g, '');
-        return limpo.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
-    };
-
-    const deletarEmpenho = async (numero) => {
+    const deletarEmpenho = (numero) => {
         if (!confirm('Tem certeza que quer deletar este empenho?')) {
             return;
         }
 
         try {
-            const response = await fetch(`${API_URL}/empenhos/${numero}`, {
-                method: 'DELETE'
-            });
-
-            if (response.ok) {
-                mostrarNotificacao('Empenho deletado com sucesso', 'sucesso');
-                await carregarEmpenhos();
-            }
+            const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            const filtrados = empenhos.filter(e => e.numero !== numero);
+            localStorage.setItem('empenhos_salvos', JSON.stringify(filtrados));
+            
+            mostrarNotificacao('Empenho deletado com sucesso', 'sucesso');
+            carregarEmpenhos();
         } catch (erro) {
             mostrarNotificacao(`Erro ao deletar: ${erro.message}`, 'erro');
         }
@@ -528,7 +509,7 @@ const ModuloEmpenhos = (() => {
     };
 })();
 
-// Inicializa quando a página carrega - com verificação de readyState
+// Inicializa quando a página carrega
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => {
         setTimeout(ModuloEmpenhos.init, 100);
