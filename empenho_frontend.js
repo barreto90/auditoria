@@ -1,16 +1,14 @@
 /**
- * Módulo de Empenhos - Versão GitHub v2
- * Corrigido: sem duplicatas, dados precisos, busca em FORNECEDORES
+ * Módulo de Empenhos - Versão FINAL
+ * Extração simplificada e correta
  */
 
 const ModuloEmpenhos = (() => {
     let empenhosDados = [];
     let empenhosDuplicados = new Map();
-    let empenhosDuplicatasInternas = new Set(); // Para evitar duplicatas no mesmo PDF
+    let numerosProcessados = new Set();
 
     const init = () => {
-        console.log('ModuloEmpenhos inicializando...');
-        
         const inputPdf = document.getElementById('input-pdf');
         const btnProcessar = document.getElementById('btn-processar');
         const btnSalvarTodos = document.getElementById('btn-salvar-todos');
@@ -22,30 +20,25 @@ const ModuloEmpenhos = (() => {
         if (btnLimpar) btnLimpar.addEventListener('click', limpar);
 
         carregarEmpenhos();
-        console.log('ModuloEmpenhos inicializado!');
     };
 
     const handleFileSelect = (e) => {
         const arquivo = e.target.files[0];
         if (arquivo) {
-            const nomeEl = document.getElementById('nome-arquivo');
-            if (nomeEl) nomeEl.textContent = arquivo.name;
-            
-            const btnProc = document.getElementById('btn-processar');
-            if (btnProc) btnProc.disabled = false;
+            document.getElementById('nome-arquivo').textContent = arquivo.name;
+            document.getElementById('btn-processar').disabled = false;
         }
     };
 
     const processarPDF = async () => {
         const arquivo = document.getElementById('input-pdf').files[0];
         if (!arquivo) {
-            mostrarNotificacao('Selecione um arquivo PDF', 'erro');
+            mostrarNotificacao('Selecione um PDF', 'erro');
             return;
         }
 
         mostrarCarregamento(true);
-        limparNotificacoes();
-        empenhosDuplicatasInternas.clear(); // Reset para novo PDF
+        numerosProcessados.clear();
 
         try {
             const arrayBuffer = await arquivo.arrayBuffer();
@@ -55,128 +48,97 @@ const ModuloEmpenhos = (() => {
             for (let i = 1; i <= pdf.numPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
-                const pageText = textContent.items.map(item => item.str).join(' ');
-                textoCompleto += pageText + '\n';
+                textoCompleto += textContent.items.map(item => item.str).join(' ') + '\n';
             }
 
             const resultado = extrairEmpenhos(textoCompleto);
-            
             empenhosDados = resultado.empenhos || [];
             empenhosDuplicados.clear();
 
             for (const empenho of empenhosDados) {
-                const duplicado = verificarDuplicadoLocal(empenho.numero);
-                if (duplicado) {
-                    empenhosDuplicados.set(empenho.numero, duplicado);
-                }
+                const dup = verificarDuplicadoLocal(empenho.numero);
+                if (dup) empenhosDuplicados.set(empenho.numero, dup);
             }
 
             exibirResultados(resultado);
-
-            if (resultado.erros && resultado.erros.length > 0) {
-                exibirErros(resultado.erros);
-            }
-
-            mostrarNotificacao(
-                `${resultado.empenhos.length} empenho(s) extraído(s) com sucesso`,
-                'sucesso'
-            );
+            if (resultado.erros.length > 0) exibirErros(resultado.erros);
+            
+            mostrarNotificacao(`${resultado.empenhos.length} empenho(s) extraído(s)`, 'sucesso');
 
         } catch (erro) {
-            console.error(erro);
-            mostrarNotificacao(`Erro ao processar PDF: ${erro.message}`, 'erro');
+            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
         } finally {
             mostrarCarregamento(false);
         }
     };
 
     // ========================================================================
-    // EXTRAÇÃO DE DADOS - SEM DUPLICATAS
+    // EXTRAÇÃO - VERSÃO SIMPLIFICADA
     // ========================================================================
 
     const extrairEmpenhos = (texto) => {
         const erros = [];
         const empenhos = [];
-        const numerosProcessados = new Set(); // Evita duplicatas
 
-        // Padrão: número com 4 dígitos + NE + 6 dígitos
+        // Divide por empenhos: procura pelo padrão de número
         const padraoNumero = /(\d{4}NE\d{6})/g;
-        const matches = [...texto.matchAll(padraoNumero)];
+        let match;
+        
+        while ((match = padraoNumero.exec(texto)) !== null) {
+            const numero = match[0];
+            
+            // Evita duplicatas
+            if (numerosProcessados.has(numero)) continue;
+            numerosProcessados.add(numero);
 
-        if (matches.length === 0) {
-            erros.push({
-                tipo: 'AVISO',
-                mensagem: 'Nenhum empenho encontrado no PDF.'
-            });
-            return { empenhos: [], erros };
-        }
-
-        matches.forEach((match) => {
             try {
-                const numero = match[0];
-
-                // IMPORTANTE: Não processa se já vimos este número neste PDF
-                if (numerosProcessados.has(numero)) {
-                    return; // Pula duplicata
-                }
-                numerosProcessados.add(numero);
-
                 const posicao = match.index;
-                
-                // Extrai bloco ao redor para ter contexto completo
-                const inicio = Math.max(0, posicao - 500);
-                const fim = Math.min(texto.length, posicao + 6000);
-                const blocoEmpenho = texto.substring(inicio, fim);
+                const bloco = texto.substring(posicao - 1000, posicao + 8000);
 
                 const empenho = {
                     numero: numero,
-                    data_referencia: extrairDataReferencia(blocoEmpenho),
-                    credor: extrairCredor(blocoEmpenho),
-                    historico: extrairHistorico(texto, posicao), // Busca no texto inteiro
-                    tem_contrato: extrairTemContrato(blocoEmpenho),
-                    tem_emenda: extrairTemEmenda(blocoEmpenho),
+                    data_referencia: extrairData(bloco),
+                    credor: extrairCredor(bloco),
+                    historico: [extrairHistorico(bloco)],
+                    tem_contrato: extrairContrato(bloco),
+                    tem_emenda: false, // Ignorando por enquanto
                     evento: 'Emissão de Empenho da Despesa'
                 };
 
                 empenhos.push(empenho);
             } catch (e) {
-                console.error('Erro ao processar empenho:', e);
-                erros.push({
-                    tipo: 'ERRO',
-                    empenho: match[0],
-                    mensagem: e.message
-                });
+                erros.push({ tipo: 'ERRO', empenho: numero, mensagem: e.message });
             }
-        });
+        }
+
+        if (empenhos.length === 0) {
+            erros.push({ tipo: 'AVISO', mensagem: 'Nenhum empenho encontrado' });
+        }
 
         return { empenhos, erros };
     };
 
     // ========================================================================
-    // EXTRAÇÃO DE CAMPOS
+    // EXTRAÇÃO DE CAMPOS - SIMPLES E DIRETO
     // ========================================================================
 
-    const extrairDataReferencia = (texto) => {
-        const regex = /Data\s+Referência\s+(\d{2}\/\d{2}\/\d{4})/i;
-        const match = texto.match(regex);
+    const extrairData = (bloco) => {
+        const match = bloco.match(/Data\s+Referência\s+(\d{2}\/\d{2}\/\d{4})/i);
         return match ? match[1] : '01/01/2026';
     };
 
-    const extrairCredor = (texto) => {
+    const extrairCredor = (bloco) => {
+        // Procura por "Credor" seguido de CNPJ e nome
+        const match = bloco.match(/Credor\s+([0-9]{2}\.?[0-9]{3}\.?[0-9]{3}\/?\d{4}\-?[0-9]{2})\s+([A-Z\s\-\.]+?)(?=\n|Endereço)/i);
+        
         let cnpj = '';
         let razaoSocial = '';
 
-        // Padrão: CNPJ no formato XX.XXX.XXX/XXXX-XX ou sem pontos
-        // Seguido de razão social na mesma linha ou próxima
-        const regexCredor = /([0-9]{2}\.?[0-9]{3}\.?[0-9]{3}\/?\d{4}\-?[0-9]{2})\s+([A-Z\s\-\.]+?)(?=\n|Endereço|Gestão)/i;
-        const matchCredor = texto.match(regexCredor);
-
-        if (matchCredor) {
-            // Limpa e formata CNPJ
-            cnpj = matchCredor[1].replace(/\D/g, '');
+        if (match) {
+            cnpj = match[1].replace(/\D/g, '');
             cnpj = cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
             
-            // Tenta buscar no banco FORNECEDORES
+            // Busca no banco FORNECEDORES
             if (window.FORNECEDORES && window.FORNECEDORES[cnpj]) {
                 razaoSocial = window.FORNECEDORES[cnpj];
             }
@@ -188,57 +150,28 @@ const ModuloEmpenhos = (() => {
         };
     };
 
-    const extrairHistorico = (textoCompleto, posicaoNumero) => {
-        // Procura por "Histórico" seguido do texto
-        // Termina antes de "Entrega" ou linha horizontal
+    const extrairHistorico = (bloco) => {
+        // Procura "Histórico" e pega texto até "Entrega"
+        const match = bloco.match(/Histórico\s*\n([^]*?)(?=\n(?:Entrega|Data\s+Prazo|Classificação))/i);
         
-        const regex = /Histórico\s*\n([^]*?)(?=\n(?:Entrega|Data\s+Prazo|_{10,})|$)/i;
-        const match = textoCompleto.substring(posicaoNumero, posicaoNumero + 10000).match(regex);
-
         if (match && match[1]) {
-            const texto = match[1]
+            return match[1]
                 .trim()
                 .split('\n')
                 .map(l => l.trim())
                 .filter(l => l.length > 3)
-                .join(' '); // Junta em um parágrafo único
-            
-            return texto.length > 5 ? [texto] : ['Sem descrição'];
+                .join(' ')
+                .substring(0, 200);
         }
-
-        return ['Sem descrição'];
+        
+        return 'Sem descrição';
     };
 
-    const extrairTemContrato = (texto) => {
-        // Procura por "Contrato" seguido de número no padrão YYYYCTXXXXXX
-        // Exemplo: 2024CT010743
-        const regex = /Contrato\s+([0-9]{4}CT[0-9]{6})/i;
-        const match = texto.match(regex);
-        
-        if (match && match[1]) {
-            return true;
-        }
-
-        // Alternativa: procura por padrão sem "Contrato" explícito
-        const regexAlternativo = /(\d{4}CT\d{6})/;
-        const matchAlt = texto.match(regexAlternativo);
-        
-        return !!matchAlt;
-    };
-
-    const extrairTemEmenda = (texto) => {
-        // Procura por "Emenda Parlamentar"
-        // Se tiver algo escrito embaixo = true, senão = false
-        
-        const regex = /Emenda\s+Parlamentar\s*\n\s*([^\n]+)/i;
-        const match = texto.match(regex);
-
-        if (match && match[1]) {
-            const valor = match[1].trim();
-            return valor.length > 0 && !valor.toLowerCase().includes('não') && valor !== '—' && valor !== 'Não';
-        }
-
-        return false;
+    const extrairContrato = (bloco) => {
+        // Procura por "Contrato" seguido de número
+        // Padrão: YYYYCTXXXXXX
+        const match = bloco.match(/Contrato\s+([0-9]{4}CT[0-9]{6})/i);
+        return !!match;
     };
 
     const verificarDuplicadoLocal = (numero) => {
@@ -257,183 +190,7 @@ const ModuloEmpenhos = (() => {
         container.innerHTML = '';
 
         if (!resultado.empenhos || resultado.empenhos.length === 0) {
-            container.innerHTML = '<p class="aviso">Nenhum empenho foi extraído</p>';
-            return;
-        }
-
-        const html = `
-            <div class="tabela-responsiva">
-                <table class="tabela-empenhos">
-                    <thead>
-                        <tr>
-                            <th>Nº Empenho</th>
-                            <th>Data Ref.</th>
-                            <th>CNPJ</th>
-                            <th>Razão Social</th>
-                            <th>Contrato</th>
-                            <th>Histórico</th>
-                            <th>Status</th>
-                            <th>Ações</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${resultado.empenhos.map((emp, idx) => criarLinhaTabela(emp, idx)).join('')}
-                    </tbody>
-                </table>
-            </div>
-        `;
-
-        container.innerHTML = html;
-
-        resultado.empenhos.forEach((emp, idx) => {
-            const btnEditar = document.getElementById(`btn-editar-${idx}`);
-            const btnRemover = document.getElementById(`btn-remover-${idx}`);
-            
-            if (btnEditar) btnEditar.addEventListener('click', () => abrirModalEditar(emp, idx));
-            if (btnRemover) btnRemover.addEventListener('click', () => removerEmpenho(idx));
-        });
-    };
-
-    const criarLinhaTabela = (empenho, idx) => {
-        const duplicado = empenhosDuplicados.get(empenho.numero);
-        const statusClass = duplicado ? 'duplicado' : 'novo';
-        const statusTexto = duplicado ? '⚠️ Duplicado' : '✓ Novo';
-        const historicoPreview = Array.isArray(empenho.historico) 
-            ? empenho.historico[0].substring(0, 30) + '...' 
-            : 'Sem descrição';
-
-        return `
-            <tr class="linha-${statusClass}" data-index="${idx}">
-                <td>${empenho.numero}</td>
-                <td>${empenho.data_referencia}</td>
-                <td>${empenho.credor.cnpj}</td>
-                <td>${empenho.credor.razao_social || '(sem nome)'}</td>
-                <td>${empenho.tem_contrato ? '✓' : '—'}</td>
-                <td title="${historicoPreview}">${historicoPreview}</td>
-                <td><span class="status ${statusClass}">${statusTexto}</span></td>
-                <td>
-                    <button class="btn-mini" id="btn-editar-${idx}" title="Editar">✎</button>
-                    <button class="btn-mini" id="btn-remover-${idx}" title="Remover">✕</button>
-                </td>
-            </tr>
-        `;
-    };
-
-    const abrirModalEditar = (empenho, idx) => {
-        const modal = document.getElementById('modal-editar-empenho');
-        if (!modal) return;
-        
-        const elementos = {
-            'edit-numero': empenho.numero,
-            'edit-data': empenho.data_referencia,
-            'edit-cnpj': empenho.credor.cnpj,
-            'edit-razao': empenho.credor.razao_social || '',
-            'edit-historico': Array.isArray(empenho.historico) ? empenho.historico.join('\n') : empenho.historico || '',
-            'edit-evento': empenho.evento
-        };
-        
-        for (const [id, value] of Object.entries(elementos)) {
-            const el = document.getElementById(id);
-            if (el) el.value = value;
-        }
-
-        const checkContrato = document.getElementById('edit-contrato');
-        const checkEmenda = document.getElementById('edit-emenda');
-        if (checkContrato) checkContrato.checked = empenho.tem_contrato;
-        if (checkEmenda) checkEmenda.checked = empenho.tem_emenda;
-
-        const btnSalvar = document.getElementById('btn-salvar-edicao');
-        if (btnSalvar) {
-            btnSalvar.onclick = () => {
-                salvarEdicao(idx);
-                fecharModal();
-            };
-        }
-
-        modal.style.display = 'block';
-    };
-
-    const fecharModal = () => {
-        const modal = document.getElementById('modal-editar-empenho');
-        if (modal) modal.style.display = 'none';
-    };
-
-    const salvarEdicao = (idx) => {
-        if (idx < empenhosDados.length) {
-            const historico = document.getElementById('edit-historico')?.value || '';
-            empenhosDados[idx] = {
-                numero: document.getElementById('edit-numero')?.value || '',
-                data_referencia: document.getElementById('edit-data')?.value || '',
-                credor: {
-                    cnpj: document.getElementById('edit-cnpj')?.value || '',
-                    razao_social: document.getElementById('edit-razao')?.value || ''
-                },
-                historico: historico.split('\n').filter(h => h.trim()),
-                tem_contrato: document.getElementById('edit-contrato')?.checked || false,
-                tem_emenda: document.getElementById('edit-emenda')?.checked || false,
-                evento: document.getElementById('edit-evento')?.value || ''
-            };
-
-            mostrarNotificacao('Empenho editado', 'info');
-            exibirResultados({ empenhos: empenhosDados });
-        }
-    };
-
-    const removerEmpenho = (idx) => {
-        if (confirm('Remover este empenho?')) {
-            empenhosDados.splice(idx, 1);
-            exibirResultados({ empenhos: empenhosDados });
-            mostrarNotificacao('Empenho removido', 'info');
-        }
-    };
-
-    const salvarTodos = async () => {
-        if (empenhosDados.length === 0) {
-            mostrarNotificacao('Nenhum empenho para salvar', 'aviso');
-            return;
-        }
-
-        try {
-            const empenhosSalvos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
-            
-            for (const empenho of empenhosDados) {
-                const indice = empenhosSalvos.findIndex(e => e.numero === empenho.numero);
-                
-                if (indice >= 0) {
-                    empenhosSalvos[indice] = empenho;
-                } else {
-                    empenhosSalvos.push(empenho);
-                }
-            }
-            
-            localStorage.setItem('empenhos_salvos', JSON.stringify(empenhosSalvos));
-            
-            mostrarNotificacao('Empenhos salvos com sucesso!', 'sucesso');
-            limpar();
-            await carregarEmpenhos();
-
-        } catch (erro) {
-            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
-        }
-    };
-
-    const carregarEmpenhos = async () => {
-        try {
-            const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
-            exibirTabelaSalvos(empenhos);
-        } catch (erro) {
-            console.error('Erro ao carregar:', erro);
-        }
-    };
-
-    const exibirTabelaSalvos = (empenhos) => {
-        const container = document.getElementById('tabela-salvos-container');
-        if (!container) return;
-        
-        container.innerHTML = '';
-
-        if (empenhos.length === 0) {
-            container.innerHTML = '<p class="aviso">Nenhum empenho cadastrado</p>';
+            container.innerHTML = '<p class="aviso">Nenhum empenho extraído</p>';
             return;
         }
 
@@ -447,7 +204,138 @@ const ModuloEmpenhos = (() => {
                             <th>CNPJ</th>
                             <th>Razão Social</th>
                             <th>Contrato</th>
-                            <th>Emenda</th>
+                            <th>Histórico</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${resultado.empenhos.map((emp, idx) => `
+                            <tr>
+                                <td>${emp.numero}</td>
+                                <td>${emp.data_referencia}</td>
+                                <td>${emp.credor.cnpj}</td>
+                                <td>${emp.credor.razao_social || '(sem nome)'}</td>
+                                <td>${emp.tem_contrato ? '✓' : '—'}</td>
+                                <td title="${emp.historico[0]}">${emp.historico[0].substring(0, 20)}...</td>
+                                <td><span class="status ${empenhosDuplicados.get(emp.numero) ? 'duplicado' : 'novo'}">${empenhosDuplicados.get(emp.numero) ? '⚠️ Dup' : '✓ Novo'}</span></td>
+                                <td>
+                                    <button class="btn-mini" onclick="ModuloEmpenhos.abrirModal(${idx})" title="Editar">✎</button>
+                                    <button class="btn-mini" onclick="ModuloEmpenhos.remover(${idx})" title="Remover">✕</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        container.innerHTML = html;
+    };
+
+    const abrirModal = (idx) => {
+        const modal = document.getElementById('modal-editar-empenho');
+        if (!modal || idx >= empenhosDados.length) return;
+
+        const emp = empenhosDados[idx];
+        
+        document.getElementById('edit-numero').value = emp.numero;
+        document.getElementById('edit-data').value = emp.data_referencia;
+        document.getElementById('edit-cnpj').value = emp.credor.cnpj;
+        document.getElementById('edit-razao').value = emp.credor.razao_social || '';
+        document.getElementById('edit-historico').value = emp.historico[0];
+        document.getElementById('edit-evento').value = emp.evento;
+        document.getElementById('edit-contrato').checked = emp.tem_contrato;
+
+        document.getElementById('btn-salvar-edicao').onclick = () => salvarModal(idx);
+        
+        modal.style.display = 'block';
+    };
+
+    const salvarModal = (idx) => {
+        if (idx < empenhosDados.length) {
+            empenhosDados[idx] = {
+                numero: document.getElementById('edit-numero').value,
+                data_referencia: document.getElementById('edit-data').value,
+                credor: {
+                    cnpj: document.getElementById('edit-cnpj').value,
+                    razao_social: document.getElementById('edit-razao').value
+                },
+                historico: [document.getElementById('edit-historico').value],
+                tem_contrato: document.getElementById('edit-contrato').checked,
+                tem_emenda: false,
+                evento: document.getElementById('edit-evento').value
+            };
+            
+            document.getElementById('modal-editar-empenho').style.display = 'none';
+            exibirResultados({ empenhos: empenhosDados, erros: [] });
+            mostrarNotificacao('Empenho editado', 'info');
+        }
+    };
+
+    const remover = (idx) => {
+        if (confirm('Remover este empenho?')) {
+            empenhosDados.splice(idx, 1);
+            exibirResultados({ empenhos: empenhosDados, erros: [] });
+        }
+    };
+
+    const salvarTodos = async () => {
+        if (empenhosDados.length === 0) {
+            mostrarNotificacao('Nenhum empenho para salvar', 'aviso');
+            return;
+        }
+
+        try {
+            const salvos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            
+            for (const emp of empenhosDados) {
+                const idx = salvos.findIndex(e => e.numero === emp.numero);
+                if (idx >= 0) {
+                    salvos[idx] = emp;
+                } else {
+                    salvos.push(emp);
+                }
+            }
+            
+            localStorage.setItem('empenhos_salvos', JSON.stringify(salvos));
+            mostrarNotificacao('Salvos com sucesso!', 'sucesso');
+            limpar();
+            carregarEmpenhos();
+
+        } catch (erro) {
+            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
+        }
+    };
+
+    const carregarEmpenhos = async () => {
+        try {
+            const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            exibirTabelaSalvos(empenhos);
+        } catch (e) {}
+    };
+
+    const exibirTabelaSalvos = (empenhos) => {
+        const container = document.getElementById('tabela-salvos-container');
+        if (!container) return;
+        
+        container.innerHTML = '';
+
+        if (empenhos.length === 0) {
+            container.innerHTML = '<p class="aviso">Nenhum cadastrado</p>';
+            return;
+        }
+
+        const html = `
+            <div class="tabela-responsiva">
+                <table class="tabela-empenhos">
+                    <thead>
+                        <tr>
+                            <th>Nº Empenho</th>
+                            <th>Data</th>
+                            <th>CNPJ</th>
+                            <th>Razão Social</th>
+                            <th>Contrato</th>
                             <th>Ações</th>
                         </tr>
                     </thead>
@@ -459,9 +347,8 @@ const ModuloEmpenhos = (() => {
                                 <td>${emp.credor.cnpj}</td>
                                 <td>${emp.credor.razao_social || '(sem nome)'}</td>
                                 <td>${emp.tem_contrato ? '✓' : '—'}</td>
-                                <td>${emp.tem_emenda ? '✓' : '—'}</td>
                                 <td>
-                                    <button class="btn-mini" onclick="ModuloEmpenhos.deletarEmpenho('${emp.numero}')" title="Deletar">🗑</button>
+                                    <button class="btn-mini" onclick="ModuloEmpenhos.deletar('${emp.numero}')" title="Deletar">🗑</button>
                                 </td>
                             </tr>
                         `).join('')}
@@ -477,10 +364,9 @@ const ModuloEmpenhos = (() => {
         const container = document.getElementById('lista-erros');
         if (!container) return;
         
-        const html = erros.map(erro => `
-            <div class="erro-item tipo-${erro.tipo.toLowerCase()}">
-                <strong>${erro.tipo}${erro.empenho ? ` [${erro.empenho}]` : ''}:</strong>
-                ${erro.mensagem}
+        const html = erros.map(e => `
+            <div class="erro-item tipo-${e.tipo.toLowerCase()}">
+                <strong>${e.tipo}${e.empenho ? ` [${e.empenho}]` : ''}:</strong> ${e.mensagem}
             </div>
         `).join('');
 
@@ -488,23 +374,16 @@ const ModuloEmpenhos = (() => {
         container.style.display = 'block';
     };
 
-    const mostrarNotificacao = (mensagem, tipo = 'info') => {
+    const mostrarNotificacao = (msg, tipo = 'info') => {
         const container = document.getElementById('notificacoes');
         if (!container) return;
         
-        const elemento = document.createElement('div');
-        elemento.className = `notificacao ${tipo}`;
-        elemento.textContent = mensagem;
-
-        container.appendChild(elemento);
-        setTimeout(() => elemento.remove(), 5000);
-    };
-
-    const limparNotificacoes = () => {
-        const notif = document.getElementById('notificacoes');
-        if (notif) notif.innerHTML = '';
-        const erros = document.getElementById('lista-erros');
-        if (erros) erros.style.display = 'none';
+        const el = document.createElement('div');
+        el.className = `notificacao ${tipo}`;
+        el.textContent = msg;
+        container.appendChild(el);
+        
+        setTimeout(() => el.remove(), 5000);
     };
 
     const mostrarCarregamento = (mostrar) => {
@@ -513,46 +392,40 @@ const ModuloEmpenhos = (() => {
     };
 
     const limpar = () => {
-        const inputPdf = document.getElementById('input-pdf');
-        const nomeArq = document.getElementById('nome-arquivo');
-        const tabelaEmpenhos = document.getElementById('tabela-empenhos-container');
-        const btnProc = document.getElementById('btn-processar');
-        
-        if (inputPdf) inputPdf.value = '';
-        if (nomeArq) nomeArq.textContent = 'Nenhum arquivo selecionado';
-        if (tabelaEmpenhos) tabelaEmpenhos.innerHTML = '';
-        if (btnProc) btnProc.disabled = true;
-        
+        document.getElementById('input-pdf').value = '';
+        document.getElementById('nome-arquivo').textContent = 'Nenhum arquivo';
+        document.getElementById('btn-processar').disabled = true;
+        document.getElementById('tabela-empenhos-container').innerHTML = '';
+        document.getElementById('notificacoes').innerHTML = '';
+        document.getElementById('lista-erros').style.display = 'none';
         empenhosDados = [];
-        empenhosDuplicados.clear();
-        limparNotificacoes();
     };
 
-    const deletarEmpenho = (numero) => {
-        if (!confirm('Deletar este empenho?')) return;
+    const deletar = (numero) => {
+        if (!confirm('Deletar?')) return;
 
         try {
-            const empenhos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
-            const filtrados = empenhos.filter(e => e.numero !== numero);
+            const salvos = JSON.parse(localStorage.getItem('empenhos_salvos') || '[]');
+            const filtrados = salvos.filter(e => e.numero !== numero);
             localStorage.setItem('empenhos_salvos', JSON.stringify(filtrados));
             
-            mostrarNotificacao('Empenho deletado', 'sucesso');
+            mostrarNotificacao('Deletado', 'sucesso');
             carregarEmpenhos();
-        } catch (erro) {
-            mostrarNotificacao(`Erro: ${erro.message}`, 'erro');
+        } catch (e) {
+            mostrarNotificacao('Erro: ' + e.message, 'erro');
         }
     };
 
     return {
         init,
-        deletarEmpenho
+        abrirModal,
+        remover,
+        deletar
     };
 })();
 
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(ModuloEmpenhos.init, 100);
-    });
+    document.addEventListener('DOMContentLoaded', () => setTimeout(ModuloEmpenhos.init, 100));
 } else {
     setTimeout(ModuloEmpenhos.init, 100);
 }
