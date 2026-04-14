@@ -201,11 +201,11 @@ const ModuloEmpenhos = (() => {
     };
 
     const extrairHistorico = (textoCompleto, posicaoNumero) => {
-        // Procura por "HISTÓRICO" em negrito (letra maiúscula e depois quebra de linha)
-        // Em seguida pega até encontrar a linha horizontal (sequência de dashes)
+        // Procura por "Histórico" seguido do texto
+        // Termina antes de "Entrega" ou linha horizontal
         
-        const regex = /HISTÓRICO\s*\n([^]*?)(?=\-{10,}|Data\s+Referência|$)/i;
-        const match = textoCompleto.substring(posicaoNumero, posicaoNumero + 8000).match(regex);
+        const regex = /Histórico\s*\n([^]*?)(?=\n(?:Entrega|Data\s+Prazo|_{10,})|$)/i;
+        const match = textoCompleto.substring(posicaoNumero, posicaoNumero + 10000).match(regex);
 
         if (match && match[1]) {
             const texto = match[1]
@@ -213,8 +213,7 @@ const ModuloEmpenhos = (() => {
                 .split('\n')
                 .map(l => l.trim())
                 .filter(l => l.length > 3)
-                .slice(0, 5) // Máximo 5 linhas
-                .join('\n');
+                .join(' '); // Junta em um parágrafo único
             
             return texto.length > 5 ? [texto] : ['Sem descrição'];
         }
@@ -223,19 +222,12 @@ const ModuloEmpenhos = (() => {
     };
 
     const extrairTemContrato = (texto) => {
-        // Procura por "Tipo Contrato" ou "Contrato"
-        // Se tiver algo escrito embaixo = true, senão = false
-        
-        const regex = /(?:Tipo\s+)?Contrato\s*\n\s*([^\n]+)/i;
+        // Procura por "Contrato" seguido de número (padrão: YYYYCTXXXXXX)
+        const regex = /Contrato\s+([0-9]{4}CT[0-9]{6})/i;
         const match = texto.match(regex);
-
-        if (match && match[1]) {
-            const valor = match[1].trim();
-            // Se tem algo e não é vazio ou "Não"
-            return valor.length > 0 && !valor.toLowerCase().includes('não') && valor !== '—' && valor !== 'Não';
-        }
-
-        return false;
+        
+        // Se encontrou número do contrato, retorna true
+        return !!match;
     };
 
     const extrairTemEmenda = (texto) => {
